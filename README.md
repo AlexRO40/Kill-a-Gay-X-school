@@ -1,11 +1,13 @@
 Kill Gay X School
 
-You will find in this repository:
 
-* The **NPC script**, including the system used to create **blood and gore effects**.
-* The **complete game map**, with all the buildings and constructions already made, which you can **modify, improve, and customize**.
-* The **teleportation (TP) system**, which is already set up and functional.
 
-The project is already well advanced and can be used as a base to continue development and add new features.
+Due to the game's **graphic blood and gore**, it may not be suitable for Roblox's content guidelines. Therefore, this repository is used to share the game's development files and scripts.
 
-This Project is create by AlexRO
+You will find:
+
+* The **NPC scripts** used for the blood and gore effects.
+* The **complete game map**, including all the buildings and constructions already made, which you can improve and customize.
+* The **teleportation (TP) systems**, which are already set up.
+
+Feel free to use the existing work as a base and continue improving the project.
