@@ -1,0 +1,334 @@
+local Debris = game:GetService("Debris")
+local TweenService = game:GetService("TweenService")
+local workspace = game:GetService("Workspace")
+local dummy = script.Parent
+local humanoid = dummy:FindFirstChildOfClass("Humanoid")
+local root = dummy:FindFirstChild("HumanoidRootPart") or dummy:FindFirstChild("Torso")
+local head = dummy:FindFirstChild("Head")
+
+-- NOUVEAU : On cherche la part "Blood" et le ParticleEmitter "Blood" dans le Dummy
+local bloodPart = dummy:FindFirstChild("Blood")
+local bloodEmitter = bloodPart and bloodPart:FindFirstChild("Blood")
+
+if not humanoid or not root then
+	warn("Dummy incomplet : pas de Humanoid ou RootPart")
+	return
+end
+
+local BLOOD_LIFETIME = 3600
+local BLOOD_DECAL_ID = "rbxassetid://10833044128"
+local DECAP_SOUND_ID = "rbxassetid://124606578932734"
+local GROW_DURATION = 3
+local MIN_SPLAT_DISTANCE = 3.5
+local MAX_BLOOD_PARTS = 60
+local HEAD_LAUNCH_FORCE = 35
+
+local previousHealth = humanoid.Health
+local isDead = false
+local headDetached = false
+
+local activeBlood = {}
+
+local function registerBlood(part, position)
+	table.insert(activeBlood, {part = part, position = position})
+	if #activeBlood > MAX_BLOOD_PARTS then
+		local oldest = table.remove(activeBlood, 1)
+		if oldest.part and oldest.part.Parent then
+			oldest.part:Destroy()
+		end
+	end
+end
+
+local function isTooCloseToExisting(position)
+	for _, entry in ipairs(activeBlood) do
+		if entry.part and entry.part.Parent then
+			if (entry.position - position).Magnitude < MIN_SPLAT_DISTANCE then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function spawnBloodOnSurface(position, normal)
+	if isTooCloseToExisting(position) then return end
+
+	local finalSize = math.random(45, 75) / 10
+	local refAxis = Vector3.new(0, 1, 0)
+	local dot = math.clamp(refAxis:Dot(normal), -1, 1)
+	local rotAxis = refAxis:Cross(normal)
+
+	local cf
+	if rotAxis.Magnitude < 0.001 then
+		if dot > 0 then
+			cf = CFrame.new(position)
+		else
+			cf = CFrame.new(position) * CFrame.Angles(math.pi, 0, 0)
+		end
+	else
+		local angle = math.acos(dot)
+		cf = CFrame.new(position) * CFrame.fromAxisAngle(rotAxis.Unit, angle)
+	end
+	cf = cf * CFrame.Angles(0, math.rad(math.random(0, 360)), 0)
+
+	local part = Instance.new("Part")
+	part.Anchored = true
+	part.CanCollide = false
+	part.Transparency = 1
+	part.Material = Enum.Material.SmoothPlastic
+	part.Name = "BloodDrop"
+	part.CFrame = cf
+	part.Parent = workspace
+
+	local decal = Instance.new("Decal")
+	decal.Texture = BLOOD_DECAL_ID
+	decal.Face = Enum.NormalId.Top
+	decal.Parent = part
+
+	Debris:AddItem(part, BLOOD_LIFETIME)
+	registerBlood(part, position)
+
+	local growSlowly = math.random() < 0.5
+	if growSlowly then
+		part.Size = Vector3.new(0.05, 0.05, 0.05)
+		local tween = TweenService:Create(
+			part,
+			TweenInfo.new(GROW_DURATION, Enum.EasingStyle.Sine, Enum.EasingDirection.Out),
+			{Size = Vector3.new(finalSize, 0.05, finalSize)}
+		)
+		tween:Play()
+	else
+		part.Size = Vector3.new(finalSize, 0.05, finalSize)
+	end
+end
+
+local function spawnBlood(position)
+	local direction = Vector3.new(0, -25, 0)
+	local rayParams = RaycastParams.new()
+	rayParams.FilterDescendantsInstances = {dummy}
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+	local result = workspace:Raycast(position + Vector3.new(0, 4, 0), direction, rayParams)
+	if result then
+		spawnBloodOnSurface(result.Position + result.Normal * 0.02, result.Normal)
+	end
+end
+
+local function spawnBloodDroplets(originPosition, count, launchDir)
+	for i = 1, count do
+		local droplet = Instance.new("Part")
+		droplet.Shape = Enum.PartType.Ball
+		droplet.Size = Vector3.new(0.25, 0.25, 0.25)
+		droplet.Color = Color3.fromRGB(110, 0, 0)
+		droplet.Material = Enum.Material.SmoothPlastic
+		droplet.CanCollide = false
+		droplet.Anchored = false
+		droplet.CastShadow = false
+		droplet.Name = "BloodDroplet"
+		droplet.Position = originPosition + Vector3.new(
+			math.random(-10, 10) / 10,
+			math.random(0, 5) / 10,
+			math.random(-10, 10) / 10
+		)
+		droplet.Parent = workspace
+
+		local dir
+		if launchDir then
+			dir = (launchDir + Vector3.new(
+				math.random(-6, 6) / 10,
+				math.random(-2, 6) / 10,
+				math.random(-6, 6) / 10
+				)).Unit
+		else
+			dir = Vector3.new(
+				math.random(-10, 10),
+				math.random(6, 16),
+				math.random(-10, 10)
+			).Unit
+		end
+		local speed = math.random(10, 20)
+		droplet.AssemblyLinearVelocity = dir * speed
+
+		local connection
+		local handled = false
+
+		local function onHit(hit)
+			if handled then return end
+			if hit:IsDescendantOf(dummy) then return end
+			handled = true
+			if connection then connection:Disconnect() end
+
+			local vel = droplet.AssemblyLinearVelocity
+			local rayDir = (vel.Magnitude > 0.1) and vel.Unit or Vector3.new(0, -1, 0)
+
+			local rayParams = RaycastParams.new()
+			rayParams.FilterDescendantsInstances = {dummy, droplet}
+			rayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+			local result = workspace:Raycast(droplet.Position - rayDir * 0.5, rayDir * 2, rayParams)
+			if result then
+				spawnBloodOnSurface(result.Position + result.Normal * 0.02, result.Normal)
+			end
+
+			droplet:Destroy()
+		end
+
+		connection = droplet.Touched:Connect(onHit)
+		Debris:AddItem(droplet, 2.5)
+	end
+end
+
+-- R6 : le Motor6D "Neck" est dans le Torso (Part0 = Torso, Part1 = Head), PAS dans Head
+local function detachHead()
+	if headDetached or not head or not head.Parent then return end
+	headDetached = true
+
+	-- NOUVEAU : On active le ParticleEmitter de sang ici
+	if bloodEmitter and bloodEmitter:IsA("ParticleEmitter") then
+		bloodEmitter.Enabled = true
+
+		-- On éteint le jet de sang après 3600 secondes
+		task.delay(3600, function()
+			if bloodEmitter then
+				bloodEmitter.Enabled = false
+			end
+		end)
+	end
+
+	local neckPosition = head.Position
+
+	local currentNeck = root and root:FindFirstChild("Neck")
+	if not currentNeck then
+		currentNeck = head:FindFirstChild("Neck")
+	end
+	if not currentNeck then
+		for _, obj in ipairs(dummy:GetDescendants()) do
+			if obj:IsA("Motor6D") and obj.Name == "Neck" then
+				currentNeck = obj
+				break
+			end
+		end
+	end
+
+	if currentNeck and currentNeck:IsA("Motor6D") then
+		currentNeck:Destroy()
+	else
+		warn("[detachHead] Impossible de trouver le Motor6D 'Neck' !")
+		headDetached = false
+		return
+	end
+
+	local launchDir = Vector3.new(
+		math.random(-10, 10) / 10,
+		math.random(6, 10) / 10,
+		math.random(-10, 10) / 10
+	).Unit
+
+	head.AssemblyLinearVelocity = launchDir * HEAD_LAUNCH_FORCE
+	head.AssemblyAngularVelocity = Vector3.new(
+		math.random(-10, 10),
+		math.random(-10, 10),
+		math.random(-10, 10)
+	)
+
+	spawnBloodDroplets(neckPosition, 10, launchDir)
+
+	local sound = Instance.new("Sound")
+	sound.SoundId = DECAP_SOUND_ID
+	sound.Volume = 1
+	sound.Parent = head
+	sound:Play()
+	Debris:AddItem(sound, 5)
+
+	task.spawn(function()
+		task.wait(0.05)
+		local maxWait = 3
+		local waited = 0
+		while waited < maxWait do
+			task.wait(0.1)
+			waited += 0.1
+			if head and head.Parent then
+				local vel = head.AssemblyLinearVelocity
+				if vel.Magnitude < 0.5 then
+					break
+				end
+			else
+				break
+			end
+		end
+
+		if root and root.Parent then
+			local center = root.Position
+			local puddleCount = math.random(1, 2)
+			for i = 1, puddleCount do
+				local offset = Vector3.new(math.random(-4, 4), 0, math.random(-4, 4))
+				spawnBlood(center + offset)
+			end
+			spawnBloodDroplets(center, 6)
+		end
+	end)
+end
+
+dummy:GetAttributeChangedSignal("ACS_HeadHit"):Connect(function()
+	local count = dummy:GetAttribute("ACS_HeadHit") or 0
+	if isDead or headDetached then return end
+	if count >= 2 then
+		detachHead()
+	end
+end)
+
+humanoid.HealthChanged:Connect(function(newHealth)
+	local damage = previousHealth - newHealth
+	if damage > 0 and not isDead then
+		local center = root.Position
+		local puddleCount = math.random(1, 2)
+		for i = 1, puddleCount do
+			local offset = Vector3.new(math.random(-6, 6), 0, math.random(-6, 6))
+			spawnBlood(center + offset)
+		end
+		spawnBloodDroplets(center, 8)
+	end
+	previousHealth = newHealth
+end)
+
+if head then
+	dummy.DescendantRemoving:Connect(function(descendant)
+		if descendant:IsA("Motor6D") and descendant.Name == "Neck" and not headDetached then
+			headDetached = true
+			detachHead()
+		end
+	end)
+end
+
+humanoid.Died:Connect(function()
+	isDead = true
+	if headDetached then return end
+
+	task.spawn(function()
+		local settledRoot = dummy:FindFirstChild("HumanoidRootPart") or dummy:FindFirstChild("Torso")
+		if not settledRoot then return end
+
+		local maxWait = 3
+		local waited = 0
+		while waited < maxWait do
+			task.wait(0.1)
+			waited += 0.1
+			local vel = settledRoot.AssemblyLinearVelocity
+			if vel.Magnitude < 0.5 then
+				break
+			end
+		end
+
+		task.wait(0.2)
+
+		if settledRoot and settledRoot.Parent then
+			local center = settledRoot.Position
+			local puddleCount = math.random(1, 2)
+			for i = 1, puddleCount do
+				local offset = Vector3.new(math.random(-6, 6), 0, math.random(-6, 6))
+				spawnBlood(center + offset)
+			end
+			spawnBloodDroplets(center, 10)
+		end
+	end)
+end)
